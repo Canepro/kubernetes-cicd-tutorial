@@ -6,8 +6,8 @@ This repo contains all the code needed to follow along with our **[YouTube Tutor
 
 To follow along with this tutorial, you'll need:
 
-- kubectl installed and configured ([https://youtu.be/IBkU4dghY0Y](https://youtu.be/IBkU4dghY0Y))
-- Helm installed: ([https://rayanslim.com/course/prometheus-grafana-monitoring-course/helm-installation](https://rayanslim.com/course/prometheus-grafana-monitoring-course/helm-installation))
+- kubectl installed and configured 
+- Helm installed: 
 - A GitHub account: ([https://github.com/](https://github.com/))
 
 ## Install ArgoCD
@@ -22,6 +22,7 @@ helm install argocd argo/argo-cd --namespace argocd --version 7.7.0
 ## Access ArgoCD UI
 
 ```bash
+kubectl get svc -n argocd
 kubectl port-forward svc/argocd-server -n argocd 8080:80
 ```
 
@@ -29,6 +30,8 @@ kubectl port-forward svc/argocd-server -n argocd 8080:80
 
 ```bash
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+
+For Windows users: bash -c "kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
 ```
 ## ArgoCD Application
 
