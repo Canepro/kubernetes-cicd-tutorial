@@ -12,7 +12,8 @@ jobs:
         uses: actions/checkout@v3
 
       # [ADDED] Force the runner to see our custom Podman shim directory.
-      # This fixes the "Unable to locate executable file: docker" error by prioritizing D:\podman-data.
+      # This fixes the "Unable to locate executable file: docker" error by prioritizing D:\podman-data
+      # in the GitHub Actions PATH for this specific job run.
       - name: Add Podman docker shim to PATH
         shell: pwsh
         run: |
@@ -20,11 +21,12 @@ jobs:
           Write-Host "Added D:\podman-data to GITHUB_PATH"
 
       # [ADDED] Ensure the Podman VM is actually running.
-      # If the PC was idle, the VM might be stopped. This prevents "connection refused" errors.
+      # If the host PC was idle, the VM might be stopped. This prevents "connection refused" errors
+      # during the build or push steps.
       - name: Ensure Podman machine is running
         shell: pwsh
         run: |
-          podman machine start || podman machine list
+          podman machine start || $true
           podman machine list
 
       - name: Login to GitHub Container Registry
@@ -37,12 +39,26 @@ jobs:
       # [CHANGED] Replaced 'docker/setup-buildx-action' and 'build-push-action'.
       # Why: Those actions rely on Docker Buildkit features that can be unstable with a Podman shim.
       # We use standard 'docker build' (which runs 'podman build' via our shim) for 100% reliability.
+      #
+      # Logic:
+      # 1. We manually lowercase the repo name because Docker tags cannot have capital letters.
+      # 2. We use 'podman push' with 'docker://' transport to explicitly tell Podman this is a remote registry.
       - name: Build and push Docker image
         shell: pwsh
         run: |
-          docker build -t ghcr.io/${{ github.repository }}:latest -t ghcr.io/${{ github.repository }}:${{ github.sha }} .
-          docker push ghcr.io/${{ github.repository }}:latest
-          docker push ghcr.io/${{ github.repository }}:${{ github.sha }}
+          # 1. Prepare variables (Lowercase the repo name)
+          $imageRepo = "ghcr.io/${{ github.repository }}".ToLower()
+          $tagLatest = "${imageRepo}:latest"
+          $tagSha    = "${imageRepo}:${{ github.sha }}"
+
+          Write-Host "Target Image: $tagLatest"
+
+          # 2. Build using the shim (works like standard docker build)
+          docker build -t $tagLatest -t $tagSha .
+
+          # 3. Push using native Podman with explicit transport
+          podman push $tagLatest "docker://$tagLatest"
+          podman push $tagSha    "docker://$tagSha"
 
       - name: Update GitOps repository
         shell: bash
@@ -60,9 +76,10 @@ jobs:
           git clone https://github.com/canepro/grade-api-gitops.git gitops
           cd gitops
           
-          # [NOTE] Simplified sed logic.
-          # Since you are running in Git Bash on Windows, standard sed usually works fine without the macOS logic.
-          sed -i "s|image: ghcr.io/${{ github.repository }}:.*|image: ghcr.io/${{ github.repository }}:${{ github.sha }}|g" deployment.yaml
+          # [FIXED] Lowercase the repo name for the manifest update too!
+          # This ensures the manifest points to the lowercase image tag we just pushed.
+          REPO_LC=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          sed -i "s|image: ghcr.io/${REPO_LC}:.*|image: ghcr.io/${REPO_LC}:${{ github.sha }}|g" deployment.yaml
           
           # Commit changes
           git config --global user.name "GitHub Actions"
