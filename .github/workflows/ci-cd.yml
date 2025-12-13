@@ -11,22 +11,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # [ADDED] Force the runner to see our custom Podman shim directory.
-      # This fixes the "Unable to locate executable file: docker" error by prioritizing D:\podman-data
-      # in the GitHub Actions PATH for this specific job run.
+      # 1. FIX PATH: Ensures the runner finds our Podman shim (D:\podman-data)
       - name: Add Podman docker shim to PATH
         shell: pwsh
         run: |
           "D:\podman-data" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           Write-Host "Added D:\podman-data to GITHUB_PATH"
 
-      # [ADDED] Ensure the Podman VM is actually running.
-      # If the host PC was idle, the VM might be stopped. This prevents "connection refused" errors
-      # during the build or push steps.
+      # 2. WAKE UP VM: Prevents connection errors if the PC was idle
       - name: Ensure Podman machine is running
         shell: pwsh
         run: |
-          podman machine start || $true
+          podman machine start
           podman machine list
 
       - name: Login to GitHub Container Registry
@@ -36,58 +32,46 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.CR_PAT }}
 
-      # [CHANGED] Replaced 'docker/setup-buildx-action' and 'build-push-action'.
-      # Why: Those actions rely on Docker Buildkit features that can be unstable with a Podman shim.
-      # We use standard 'docker build' (which runs 'podman build' via our shim) for 100% reliability.
-      #
-      # Logic:
-      # 1. We manually lowercase the repo name because Docker tags cannot have capital letters.
-      # 2. We use 'podman push' with 'docker://' transport to explicitly tell Podman this is a remote registry.
+      # 3. BUILD & PUSH: Lowers case and uses explicit "docker://" transport for reliability
       - name: Build and push Docker image
         shell: pwsh
         run: |
-          # 1. Prepare variables (Lowercase the repo name)
           $imageRepo = "ghcr.io/${{ github.repository }}".ToLower()
           $tagLatest = "${imageRepo}:latest"
           $tagSha    = "${imageRepo}:${{ github.sha }}"
 
           Write-Host "Target Image: $tagLatest"
 
-          # 2. Build using the shim (works like standard docker build)
           docker build -t $tagLatest -t $tagSha .
-
-          # 3. Push using native Podman with explicit transport
           podman push $tagLatest "docker://$tagLatest"
           podman push $tagSha    "docker://$tagSha"
 
+      # 4. GITOPS UPDATE: Uses PowerShell to handle paths and casing automatically
       - name: Update GitOps repository
-        shell: bash
+        shell: pwsh
         env:
           GIT_TOKEN: ${{ secrets.GITOPS_PAT }}
         run: |
-          # Configure git credential store
+          # Configure credentials
           git config --global credential.helper store
-          echo "https://${GIT_TOKEN}:x-oauth-basic@github.com" > ~/.git-credentials
-          
-          # Remove any existing gitops directory
-          rm -rf gitops
-          
-          # Clone repository using HTTPS URL without token
+          "https://$env:GIT_TOKEN:x-oauth-basic@github.com" | Set-Content "$env:USERPROFILE\.git-credentials"
+
+          # Clean & Clone
+          Remove-Item -Recurse -Force gitops -ErrorAction SilentlyContinue
           git clone https://github.com/canepro/grade-api-gitops.git gitops
-          cd gitops
-          
-          # [FIXED] Lowercase the repo name for the manifest update too!
-          # This ensures the manifest points to the lowercase image tag we just pushed.
-          REPO_LC=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          sed -i "s|image: ghcr.io/${REPO_LC}:.*|image: ghcr.io/${REPO_LC}:${{ github.sha }}|g" deployment.yaml
-          
-          # Commit changes
+          Set-Location gitops
+
+          # Update Deployment Manifest
+          # PowerShell -replace is case-insensitive, so it finds 'Canepro' and replaces with 'canepro' automatically.
+          $repoLc = "${{ github.repository }}".ToLower()
+          (Get-Content deployment.yaml) -replace "image:\s*ghcr\.io/$repoLc:.*", "image: ghcr.io/$repoLc:${{ github.sha }}" |
+            Set-Content deployment.yaml
+
+          # Commit & Push
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
+
           git add deployment.yaml
-          
-          # Added '|| true' to prevent failure if no changes are detected (idempotency)
-          git commit -m "Update image to ${{ github.sha }}" || true
-          
-          # Push
-          git push -f https://${GIT_TOKEN}@github.com/canepro/grade-api-gitops.git main
+          # 2>$null suppresses the error if there is nothing new to commit
+          git commit -m "Update image to ${{ github.sha }}" 2>$null
+          git push -f "https://$env:GIT_TOKEN@github.com/canepro/grade-api-gitops.git" main
