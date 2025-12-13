@@ -22,7 +22,7 @@ jobs:
       - name: Ensure Podman machine is running
         shell: pwsh
         run: |
-          podman machine start
+          podman machine start || $true
           podman machine list
 
       - name: Login to GitHub Container Registry
@@ -64,7 +64,9 @@ jobs:
           # Update Deployment Manifest
           # PowerShell -replace is case-insensitive, so it finds 'Canepro' and replaces with 'canepro' automatically.
           $repoLc = "${{ github.repository }}".ToLower()
-          (Get-Content deployment.yaml) -replace "image:\s*ghcr\.io/$repoLc:.*", "image: ghcr.io/$repoLc:${{ github.sha }}" |
+          
+          # FIX: We use ${repoLc} (with curly braces) below so PowerShell knows the variable name ends before the colon.
+          (Get-Content deployment.yaml) -replace "image:\s*ghcr\.io/${repoLc}:.*", "image: ghcr.io/${repoLc}:${{ github.sha }}" |
             Set-Content deployment.yaml
 
           # Commit & Push
