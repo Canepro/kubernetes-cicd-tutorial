@@ -10,22 +10,40 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+
+      # [ADDED] Force the runner to see our custom Podman shim directory.
+      # This fixes the "Unable to locate executable file: docker" error by prioritizing D:\podman-data.
+      - name: Add Podman docker shim to PATH
+        shell: pwsh
+        run: |
+          "D:\podman-data" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "Added D:\podman-data to GITHUB_PATH"
+
+      # [ADDED] Ensure the Podman VM is actually running.
+      # If the PC was idle, the VM might be stopped. This prevents "connection refused" errors.
+      - name: Ensure Podman machine is running
+        shell: pwsh
+        run: |
+          podman machine start || podman machine list
+          podman machine list
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v2
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.CR_PAT }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+
+      # [CHANGED] Replaced 'docker/setup-buildx-action' and 'build-push-action'.
+      # Why: Those actions rely on Docker Buildkit features that can be unstable with a Podman shim.
+      # We use standard 'docker build' (which runs 'podman build' via our shim) for 100% reliability.
       - name: Build and push Docker image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
+        shell: pwsh
+        run: |
+          docker build -t ghcr.io/${{ github.repository }}:latest -t ghcr.io/${{ github.repository }}:${{ github.sha }} .
+          docker push ghcr.io/${{ github.repository }}:latest
+          docker push ghcr.io/${{ github.repository }}:${{ github.sha }}
+
       - name: Update GitOps repository
         shell: bash
         env:
@@ -42,17 +60,17 @@ jobs:
           git clone https://github.com/canepro/grade-api-gitops.git gitops
           cd gitops
           
-          if [[ "$OSTYPE" == "darwin"* ]]; then
-            sed -i '' "s|image: ghcr.io/${{ github.repository }}:.*|image: ghcr.io/${{ github.repository }}:${{ github.sha }}|g" deployment.yaml
-          else
-            sed -i "s|image: ghcr.io/${{ github.repository }}:.*|image: ghcr.io/${{ github.repository }}:${{ github.sha }}|g" deployment.yaml
-          fi
+          # [NOTE] Simplified sed logic.
+          # Since you are running in Git Bash on Windows, standard sed usually works fine without the macOS logic.
+          sed -i "s|image: ghcr.io/${{ github.repository }}:.*|image: ghcr.io/${{ github.repository }}:${{ github.sha }}|g" deployment.yaml
           
           # Commit changes
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           git add deployment.yaml
-          git commit -m "Update image to ${{ github.sha }}"
+          
+          # Added '|| true' to prevent failure if no changes are detected (idempotency)
+          git commit -m "Update image to ${{ github.sha }}" || true
           
           # Push
           git push -f https://${GIT_TOKEN}@github.com/canepro/grade-api-gitops.git main
