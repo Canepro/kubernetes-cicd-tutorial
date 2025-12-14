@@ -48,7 +48,7 @@ jobs:
 
       # 4. GITOPS UPDATE: Uses PowerShell to handle paths and casing automatically
       - name: Update GitOps repository
-        shell: pwsh
+        shell: bash
         env:
           GIT_TOKEN: ${{ secrets.GITOPS_PAT }}
         run: |
